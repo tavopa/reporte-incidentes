@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/gustavo/proyectos/reporte-incidentes/.gitignore:*)"
+    ]
+  }
+}

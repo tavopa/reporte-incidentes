@@ -1,0 +1,101 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: incidentes_postgres
+    environment:
+      POSTGRES_DB: ${BOT_POSTGRES_DB}
+      POSTGRES_USER: ${BOT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${BOT_POSTGRES_PASSWORD}
+    networks:
+      - incidente-network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BOT_POSTGRES_USER} -d ${BOT_POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm-non_root:main-v1.81.0-stable
+    container_name: litellm-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database configuration
+      DATABASE_URL: 'postgresql://${LITEMAAS_POSTGRES_USER:-litellm_user}:${LITEMAAS_POSTGRES_PASSWORD:-litellm_password}@postgres:5432/${LITEMAAS_POSTGRES_DB:-litellm_db}'
+
+      # LiteLLM configuration
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:-admin}
+
+      # Other configurations
+      LITELLM_MODE: 'PRODUCTION'
+      STORE_MODEL_IN_DB: 'True'
+    ports:
+      - '4000:4000' # LiteLLM UI accessible at http://localhost:4000
+    userns_mode: keep-id
+    volumes:
+      #- ./data/litellm:/app/data:Z
+      - ./litemaas/config.yaml:/app/config.yaml:ro,Z # Optional: mount config file
+    networks:
+      - incidente-network
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    command: ['--config', '/app/config.yaml']
+
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: incidentes_bot
+    environment:
+      DATABASE_URL: postgresql://${BOT_POSTGRES_USER}:${BOT_POSTGRES_PASSWORD}@postgres:5432/${BOT_POSTGRES_DB}
+      LITEMAAS_URL: http://litellm-service:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - incidente-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: incidentes_frontend
+    environment:
+      DATABASE_URL: postgresql://${BOT_POSTGRES_USER}:${BOT_POSTGRES_PASSWORD}@postgres:5432/${BOT_POSTGRES_DB}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "3000:3000"
+    networks:
+      - incidente-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  incidente-network:
+    driver: bridge
+    name: incidente-network
